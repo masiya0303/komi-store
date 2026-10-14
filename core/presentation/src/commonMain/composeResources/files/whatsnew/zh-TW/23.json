@@ -1,0 +1,16 @@
+{
+  "versionCode": 23,
+  "versionName": "1.9.4",
+  "releaseDate": "2026-10-14",
+  "showAsSheet": true,
+  "sections": [
+    {
+      "type": "FIXED",
+      "bullets": [
+        "修復了主頁抓取延遲嚴重的問題 — 此前可能長時間停留在舊版本的應用資訊，現在會及時重新整理到最新版本。",
+        "修復了 README 不更新的問題 — 此前可能一直顯示舊版 README 內容，現在會同步拉取最新文件。",
+        "開發者檔案現在也會顯示 fork 的倉庫 — 此前 fork 倉庫被過濾導致列表不全，Forks 過濾器現在也能正常使用了。"
+      ]
+    }
+  ]
+}

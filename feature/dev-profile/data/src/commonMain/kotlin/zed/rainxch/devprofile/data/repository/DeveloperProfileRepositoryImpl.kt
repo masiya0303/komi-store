@@ -160,7 +160,7 @@ class DeveloperProfileRepositoryImpl(
 
                     if (pageRepos.isEmpty()) break
 
-                    allRepos.addAll(pageRepos.filter { !it.archived && !it.fork })
+                    allRepos.addAll(pageRepos.filter { !it.archived })
 
                     if (pageRepos.size < perPage) break
                     page++

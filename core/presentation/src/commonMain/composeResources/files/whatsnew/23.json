@@ -1,0 +1,16 @@
+{
+  "versionCode": 23,
+  "versionName": "1.9.4",
+  "releaseDate": "2026-10-14",
+  "showAsSheet": true,
+  "sections": [
+    {
+      "type": "FIXED",
+      "bullets": [
+        "Fixed stale home-page data — it could lag behind and keep showing an older app version for a long time; it now refreshes to the latest release promptly.",
+        "Fixed README not updating — a repo's README could stay stuck on an older version; it now pulls the current document.",
+        "Developer profiles now show forked repositories too — previously forked repos were filtered out, leaving the list incomplete; the Forks filter now works as expected."
+      ]
+    }
+  ]
+}

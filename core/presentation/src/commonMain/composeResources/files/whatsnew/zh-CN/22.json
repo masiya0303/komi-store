@@ -1,0 +1,15 @@
+{
+  "versionCode": 22,
+  "versionName": "1.9.3",
+  "releaseDate": "2026-10-14",
+  "showAsSheet": true,
+  "sections": [
+    {
+      "type": "FIXED",
+      "bullets": [
+        "修复了主页抓取延迟严重的问题 — 此前可能长时间停留在旧版本的应用信息，现在会及时刷新到最新版本。",
+        "修复了 README 不更新的问题 — 此前可能一直显示旧版 README 内容，现在会同步拉取最新文档。"
+      ]
+    }
+  ]
+}

@@ -1,19 +1,14 @@
 {
   "versionCode": 22,
   "versionName": "1.9.3",
-  "releaseDate": "2026-06-28",
+  "releaseDate": "2026-10-14",
   "showAsSheet": true,
   "sections": [
     {
-      "type": "NEW",
-      "bullets": [
-        "Traditional Chinese (繁體中文) is now available — switch to it anytime under Tweaks → Language."
-      ]
-    },
-    {
       "type": "FIXED",
       "bullets": [
-        "Apps that ship nightly or rolling builds under a reused tag, like \"nightly\", now get an update notice when a new build lands, and no longer re-offer the build you already have."
+        "Fixed stale home-page data — it could lag behind and keep showing an older app version for a long time; it now refreshes to the latest release promptly.",
+        "Fixed README not updating — a repo's README could stay stuck on an older version; it now pulls the current document."
       ]
     }
   ]
