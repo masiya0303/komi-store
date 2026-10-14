@@ -1,0 +1,101 @@
+name: Build Android APK/AAB
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'composeApp/**'
+      - 'core/**'
+      - 'feature/**'
+      - 'build-logic/**'
+      - 'gradle/**'
+      - 'gradle.properties'
+      - 'settings.gradle.kts'
+      - '.github/workflows/build-android-mobile.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-android:
+    name: Build Android
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept Android SDK licenses
+        run: yes | sdkmanager --licenses || true
+
+      - name: Decode release keystore
+        id: signing
+        shell: bash
+        run: |
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > komi-store-release.jks
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build release (APK + AAB) with signing
+        if: steps.signing.outputs.available == 'true'
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEY_STORE_PASSWORD: ${{ secrets.ANDROID_KEY_STORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          ./gradlew :composeApp:assembleRelease :composeApp:bundleRelease \
+            -Pandroid.injected.signing.store.file=komi-store-release.jks \
+            -Pandroid.injected.signing.store.password="$ANDROID_KEY_STORE_PASSWORD" \
+            -Pandroid.injected.signing.key.alias="$ANDROID_KEY_ALIAS" \
+            -Pandroid.injected.signing.key.password="$ANDROID_KEY_PASSWORD" \
+            --stacktrace --no-daemon
+
+      - name: Build debug (APK + AAB) as fallback
+        if: steps.signing.outputs.available != 'true'
+        run: ./gradlew :composeApp:assembleDebug :composeApp:bundleDebug --stacktrace --no-daemon
+
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp composeApp/build/outputs/apk/release/*.apk dist/ 2>/dev/null || true
+          cp composeApp/build/outputs/apk/debug/*.apk dist/ 2>/dev/null || true
+          cp composeApp/build/outputs/bundle/release/*.aab dist/ 2>/dev/null || true
+          cp composeApp/build/outputs/bundle/debug/*.aab dist/ 2>/dev/null || true
+          ls -la dist/
+
+      - name: Publish to GitHub Release (signed build only)
+        if: steps.signing.outputs.available == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.apk
+            dist/*.aab
+          generate_release_notes: true
+          fail_on_unmatched_files: false
+
+      - name: Save artifacts (unsigned fallback)
+        if: steps.signing.outputs.available != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-build-unsigned
+          path: dist/
