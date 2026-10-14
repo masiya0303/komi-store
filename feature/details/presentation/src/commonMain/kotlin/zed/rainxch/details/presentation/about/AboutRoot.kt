@@ -52,6 +52,7 @@ import zed.rainxch.githubstore.core.presentation.res.Res
 import zed.rainxch.githubstore.core.presentation.res.cd_back
 import zed.rainxch.githubstore.core.presentation.res.details_about_screen_title
 import zed.rainxch.githubstore.core.presentation.res.retry
+import zed.rainxch.githubstore.core.presentation.res.refresh
 
 @Composable
 fun AboutRoot(
