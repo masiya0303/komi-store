@@ -1,5 +1,4 @@
 name: Build Android APK/AAB
-
 on:
   push:
     branches: [main]
@@ -13,32 +12,23 @@ on:
       - 'settings.gradle.kts'
       - '.github/workflows/build-android-mobile.yml'
   workflow_dispatch:
-
 permissions:
   contents: write
-
 jobs:
   build-android:
     name: Build Android
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-
       - name: Set up JDK 21
         uses: actions/setup-java@v6
         with:
           java-version: '21'
           distribution: 'temurin'
           cache: gradle
-
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
-
-      - name: Accept Android SDK licenses
-        run: yes | sdkmanager --licenses || true
-
       - name: Decode release keystore
         id: signing
         shell: bash
@@ -49,15 +39,14 @@ jobs:
           else
             echo "available=false" >> "$GITHUB_OUTPUT"
           fi
-
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
-
       - name: Build release (APK + AAB) with signing
         if: steps.signing.outputs.available == 'true'
         shell: bash
         env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEY_STORE_PASSWORD: ${{ secrets.ANDROID_KEY_STORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
@@ -68,31 +57,52 @@ jobs:
             -Pandroid.injected.signing.key.alias="$ANDROID_KEY_ALIAS" \
             -Pandroid.injected.signing.key.password="$ANDROID_KEY_PASSWORD" \
             --stacktrace --no-daemon
-
       - name: Build debug (APK + AAB) as fallback
         if: steps.signing.outputs.available != 'true'
         run: ./gradlew :composeApp:assembleDebug :composeApp:bundleDebug --stacktrace --no-daemon
-
-      - name: Collect artifacts
+      - name: Extract version and rename artifacts
+        id: version
         shell: bash
         run: |
+          # 从 composeApp/build.gradle.kts 提取 versionName
+          VERSION=$(grep -oP 'versionName\s*=\s*"\K[^"]+' composeApp/build.gradle.kts || echo "1.0.0")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          
+          # 重命名 APK/AAB：去掉版本号后缀
           mkdir -p dist
-          cp composeApp/build/outputs/apk/release/*.apk dist/ 2>/dev/null || true
-          cp composeApp/build/outputs/apk/debug/*.apk dist/ 2>/dev/null || true
-          cp composeApp/build/outputs/bundle/release/*.aab dist/ 2>/dev/null || true
-          cp composeApp/build/outputs/bundle/debug/*.aab dist/ 2>/dev/null || true
+          for f in composeApp/build/outputs/apk/release/*.apk; do
+            [ -f "$f" ] && cp "$f" "dist/komi-store-release.apk" && break
+          done
+          for f in composeApp/build/outputs/apk/debug/*.apk; do
+            [ -f "$f" ] && cp "$f" "dist/komi-store-debug.apk" && break
+          done
+          for f in composeApp/build/outputs/bundle/release/*.aab; do
+            [ -f "$f" ] && cp "$f" "dist/komi-store-release.aab" && break
+          done
+          for f in composeApp/build/outputs/bundle/debug/*.aab; do
+            [ -f "$f" ] && cp "$f" "dist/komi-store-debug.aab" && break
+          done
           ls -la dist/
-
-      - name: Publish to GitHub Release (signed build only)
+      - name: Cleanup keystore
+        if: always()
+        run: rm -f komi-store-release.jks
+      - name: Create GitHub Release
         if: steps.signing.outputs.available == 'true'
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist/*.apk
-            dist/*.aab
-          generate_release_notes: true
-          fail_on_unmatched_files: false
-
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          # 如果 tag 不存在则创建 release，存在则上传附件
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --title "komi-store $TAG" \
+              --generate-notes \
+              dist/*.apk dist/*.aab
+          else
+            gh release upload "$TAG" dist/*.apk dist/*.aab --clobber
+          fi
       - name: Save artifacts (unsigned fallback)
         if: steps.signing.outputs.available != 'true'
         uses: actions/upload-artifact@v4
