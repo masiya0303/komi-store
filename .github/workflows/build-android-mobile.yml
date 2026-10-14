@@ -1,49 +1,195 @@
 name: Build Android APK/AAB
+
 on:
   push:
-    branches: [main]
-    paths:
-      - 'composeApp/**'
-      - 'core/**'
-      - 'feature/**'
-      - 'build-logic/**'
-      - 'gradle/**'
-      - 'gradle.properties'
-      - 'settings.gradle.kts'
-      - '.github/workflows/build-android-mobile.yml'
+    tags:
+      - 'v*.*.*'
   workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（例如 v1.9.3；留空则从 gradle/libs.versions.toml 读取 projectVersionName）'
+        required: false
+        default: ''
+
 permissions:
   contents: write
+
 jobs:
+  # ─────────────────────────────────────────────────────────────
+  # Job 1: 解析版本号 + 创建 / 复用 GitHub Release
+  #   - tag push：以 tag 名作为 release 版本，并与 libs.versions.toml 校对
+  #   - manual  ：取 input.version 或 fallback 到 projectVersionName；tag 不强制存在
+  # ─────────────────────────────────────────────────────────────
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract version from gradle/libs.versions.toml
+        id: toml
+        shell: bash
+        run: |
+          RAW=$(grep -oP 'projectVersionName\s*=\s*"\K[^"]+' gradle/libs.versions.toml || echo "1.0.0")
+          echo "raw=$RAW" >> "$GITHUB_OUTPUT"
+          echo "tag=v$RAW" >> "$GITHUB_OUTPUT"
+          echo "project version in libs.versions.toml: $RAW (tag: v$RAW)"
+
+      - name: Resolve release version
+        id: version
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+          TOML_VERSION: ${{ steps.toml.outputs.raw }}
+        run: |
+          if [ "$EVENT_NAME" = "push" ]; then
+            VERSION="$REF_NAME"
+          elif [ -n "$INPUT_VERSION" ]; then
+            VERSION="$INPUT_VERSION"
+          else
+            VERSION="v$TOML_VERSION"
+          fi
+
+          # 补齐前缀 v
+          case "$VERSION" in
+            v*) : ;;
+            *) VERSION="v$VERSION" ;;
+          esac
+
+          if ! echo "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.+-]+)?$'; then
+            echo "::error::Invalid version '$VERSION'. Expected format like v1.2.3."
+            exit 1
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Release version: $VERSION"
+
+      - name: Verify version matches gradle/libs.versions.toml
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TOML_VERSION: ${{ steps.toml.outputs.tag }}
+        run: |
+          if [ "$VERSION" != "$TOML_VERSION" ]; then
+            echo "::error::Release version '$VERSION' does not match projectVersionName '$TOML_VERSION' in gradle/libs.versions.toml."
+            echo "::error::Bump projectVersionName in libs.versions.toml first, then commit and dispatch this workflow."
+            exit 1
+          fi
+          echo "✓ $VERSION matches libs.versions.toml"
+
+      - name: Auto-create and push tag if missing (manual dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/$VERSION" >/dev/null 2>&1; then
+            echo "::notice::Tag $VERSION already exists, skipping tag creation."
+          else
+            echo "Creating tag $VERSION at commit $(git rev-parse HEAD)..."
+            git config user.name  "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$VERSION" -m "komi-store $VERSION"
+            git push origin "refs/tags/$VERSION"
+            echo "✓ Pushed tag $VERSION to origin"
+          fi
+
+      - name: Check for an existing release
+        id: existing_release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if gh release view "$RELEASE_VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo 'exists=true'  >> "$GITHUB_OUTPUT"
+            echo "::notice::Release $RELEASE_VERSION already exists; will reuse and upload APK."
+          else
+            echo 'exists=false' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release
+        if: steps.existing_release.outputs.exists == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: ${{ steps.version.outputs.version }}
+          name: komi-store ${{ steps.version.outputs.version }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+
+      - name: Write summary
+        if: always()
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          EXISTS: ${{ steps.existing_release.outputs.exists }}
+        run: |
+          {
+            echo "### GitHub Release"
+            echo "- Version: **$VERSION**"
+            if [ "$EXISTS" = "true" ]; then
+              echo "- 复用已存在的 release，只追加 APK"
+            else
+              echo "- 新建 release：https://github.com/$GITHUB_REPOSITORY/releases/tag/$VERSION"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ─────────────────────────────────────────────────────────────
+  # Job 2: 构建 Android APK/AAB 并上传为 Release 资产
+  #   - 有 keystore secrets → assembleRelease / bundleRelease（正式签名 APK）
+  #   - 无 keystore secrets → assembleDebug / bundleDebug（fallback，APK 可安装但不可上架）
+  # ─────────────────────────────────────────────────────────────
   build-android:
     name: Build Android
+    needs: create-release
+    if: needs.create-release.result == 'success'
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v4
+
       - name: Set up JDK 21
-        uses: actions/setup-java@v6
+        uses: actions/setup-java@v4
         with:
           java-version: '21'
           distribution: 'temurin'
           cache: gradle
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
-      - name: Decode release keystore
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Check signing configuration
         id: signing
         shell: bash
         run: |
-          if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
-            echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > komi-store-release.jks
-            echo "available=true" >> "$GITHUB_OUTPUT"
+          if [ -n "${ANDROID_KEYSTORE_BASE64:-}" ]; then
+            echo "available=true"  >> "$GITHUB_OUTPUT"
           else
             echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No ANDROID_KEYSTORE_BASE64 secret found. Building DEBUG APK as fallback."
           fi
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-      - name: Grant execute permission for gradlew
-        run: chmod +x gradlew
-      - name: Build release (APK + AAB) with signing
+
+      - name: Decode release keystore
+        if: steps.signing.outputs.available == 'true'
+        shell: bash
+        run: |
+          echo "${ANDROID_KEYSTORE_BASE64}" | base64 -d > komi-store-release.jks
+          echo "✓ keystore decoded ($(wc -c < komi-store-release.jks) bytes)"
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+
+      - name: Build signed release (APK + AAB)
         if: steps.signing.outputs.available == 'true'
         shell: bash
         env:
@@ -57,55 +203,68 @@ jobs:
             -Pandroid.injected.signing.key.alias="$ANDROID_KEY_ALIAS" \
             -Pandroid.injected.signing.key.password="$ANDROID_KEY_PASSWORD" \
             --stacktrace --no-daemon
-      - name: Build debug (APK + AAB) as fallback
+
+      - name: Build debug fallback (APK + AAB)
         if: steps.signing.outputs.available != 'true'
         run: ./gradlew :composeApp:assembleDebug :composeApp:bundleDebug --stacktrace --no-daemon
-      - name: Extract version and rename artifacts
-        id: version
-        shell: bash
-        run: |
-          # 从 gradle/libs.versions.toml 提取 projectVersionName
-          VERSION=$(grep -oP 'projectVersionName\s*=\s*"\K[^"]+' gradle/libs.versions.toml || echo "1.0.0")
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
-          
-          # 重命名 APK/AAB：去掉版本号后缀
-          mkdir -p dist
-          for f in composeApp/build/outputs/apk/release/*.apk; do
-            [ -f "$f" ] && cp "$f" "dist/komi-store-release.apk" && break
-          done
-          for f in composeApp/build/outputs/apk/debug/*.apk; do
-            [ -f "$f" ] && cp "$f" "dist/komi-store-debug.apk" && break
-          done
-          for f in composeApp/build/outputs/bundle/release/*.aab; do
-            [ -f "$f" ] && cp "$f" "dist/komi-store-release.aab" && break
-          done
-          for f in composeApp/build/outputs/bundle/debug/*.aab; do
-            [ -f "$f" ] && cp "$f" "dist/komi-store-debug.aab" && break
-          done
-          ls -la dist/
+
       - name: Cleanup keystore
         if: always()
         run: rm -f komi-store-release.jks
-      - name: Create GitHub Release
-        if: steps.signing.outputs.available == 'true'
+
+      - name: Collect and rename APK/AAB
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ needs.create-release.outputs.version }}
+          SIGNED: ${{ steps.signing.outputs.available }}
         run: |
-          # 如果 tag 不存在则创建 release，存在则上传附件
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" \
-              --title "komi-store $TAG" \
-              --generate-notes \
-              dist/*.apk dist/*.aab
+          mkdir -p dist
+          if [ "$SIGNED" = "true" ]; then
+            cp composeApp/build/outputs/apk/release/*.apk "dist/komi-store-${VERSION}-release.apk"
+            cp composeApp/build/outputs/bundle/release/*.aab "dist/komi-store-${VERSION}-release.aab"
           else
-            gh release upload "$TAG" dist/*.apk dist/*.aab --clobber
+            cp composeApp/build/outputs/apk/debug/*.apk "dist/komi-store-${VERSION}-debug.apk"
+            cp composeApp/build/outputs/bundle/debug/*.aab "dist/komi-store-${VERSION}-debug.aab"
           fi
-      - name: Save artifacts (unsigned fallback)
-        if: steps.signing.outputs.available != 'true'
+          echo "--- dist/ contents ---"
+          ls -la dist/
+
+      - name: Upload APK/AAB to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ needs.create-release.outputs.version }}
+        run: |
+          echo "Uploading dist/* to release $RELEASE_VERSION ..."
+          gh release upload "$RELEASE_VERSION" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
+          echo "--- release assets ---"
+          gh release view "$RELEASE_VERSION" --repo "$GITHUB_REPOSITORY" \
+            --json assets --jq '.assets[] | "- \(.name) (\(.size) bytes)"'
+
+      - name: Write summary
+        if: always()
+        shell: bash
+        env:
+          VERSION: ${{ needs.create-release.outputs.version }}
+          SIGNED: ${{ steps.signing.outputs.available }}
+        run: |
+          {
+            echo "### Build Result"
+            echo "- Version: **$VERSION**"
+            if [ "$SIGNED" = "true" ]; then
+              echo "- ✅ 使用正式签名 keystore"
+            else
+              echo "- ⚠️ 无 keystore secrets，输出 DEBUG 构建（可安装，但不可上架 Google Play）"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # 冗余备份：把产物也上传为 Actions artifact（zip），
+      # 防止万一 release 上传失败可从 Actions 页取回。
+      - name: Backup to Actions artifact
         uses: actions/upload-artifact@v4
         with:
-          name: android-build-unsigned
+          name: android-build-${{ needs.create-release.outputs.version }}
           path: dist/
+          if-no-files-found: warn
+          retention-days: 14
