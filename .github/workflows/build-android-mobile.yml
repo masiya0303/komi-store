@@ -1,4 +1,4 @@
-name: Build Android APK/AAB
+name: Build and Release
 
 on:
   push:
@@ -25,6 +25,11 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
 
       - name: Extract projectVersionName from gradle/libs.versions.toml
         id: toml
@@ -64,21 +69,29 @@ jobs:
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Auto-create tag if missing
+      - name: Verify manual release tag exists
         if: github.event_name == 'workflow_dispatch'
         shell: bash
         env:
           RELEASE_VERSION: ${{ steps.get_version.outputs.version }}
         run: |
-          if git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_VERSION" >/dev/null 2>&1; then
-            echo "Tag $RELEASE_VERSION already exists on remote, skipping."
-            exit 0
+          if ! git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_VERSION" >/dev/null 2>&1; then
+            echo "::error::Tag $RELEASE_VERSION does not exist. Push the version tag first, then run this workflow."
+            exit 1
           fi
-          echo "Creating and pushing tag $RELEASE_VERSION ..."
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "$RELEASE_VERSION" -m "Release $RELEASE_VERSION"
-          git push origin "refs/tags/$RELEASE_VERSION"
+
+          REMOTE_TAG_SHA=$(git ls-remote origin "refs/tags/$RELEASE_VERSION^{}" | awk 'NR == 1 { print $1 }')
+          if [ -z "$REMOTE_TAG_SHA" ]; then
+            REMOTE_TAG_SHA=$(git ls-remote origin "refs/tags/$RELEASE_VERSION" | awk 'NR == 1 { print $1 }')
+          fi
+          CHECKOUT_SHA=$(git rev-parse HEAD)
+
+          if [ "$REMOTE_TAG_SHA" != "$CHECKOUT_SHA" ]; then
+            echo "::error::Tag $RELEASE_VERSION points to $REMOTE_TAG_SHA, but this workflow checked out $CHECKOUT_SHA. Dispatch the workflow from the tagged commit."
+            exit 1
+          fi
+
+          echo "Using existing tag $RELEASE_VERSION at $CHECKOUT_SHA; no tag will be created or pushed."
 
       - name: Check for an existing release
         id: existing_release
@@ -88,18 +101,18 @@ jobs:
         run: |
           if gh release view "$RELEASE_VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo 'exists=true' >> "$GITHUB_OUTPUT"
-            echo "::notice::Release $RELEASE_VERSION already exists; existing notes and assets are preserved."
+            echo "::notice::Release $RELEASE_VERSION already exists; existing notes and assets are preserved; missing APK may be uploaded."
           else
             echo 'exists=false' >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Create GitHub Release
+      - name: Create Draft Release
         if: steps.existing_release.outputs.exists == 'false'
         uses: softprops/action-gh-release@v3
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           tag_name: ${{ steps.get_version.outputs.version }}
-          name: komi-store ${{ steps.get_version.outputs.version }}
+          name: Komi Store ${{ steps.get_version.outputs.version }}
           draft: false
           prerelease: false
           generate_release_notes: true
@@ -118,26 +131,35 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
+
+      - name: Configure Android SDK path
+        run: echo "sdk.dir=$ANDROID_HOME" > local.properties
+
+      - name: Fix Gradle distribution URL
+        run: |
+          sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.14.3-bin.zip|' gradle/wrapper/gradle-wrapper.properties
 
       - name: Check signing configuration
         id: signing
         run: |
           if [ -n "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" ]; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
+            echo "available=true" >> $GITHUB_OUTPUT
           else
-            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "available=false" >> $GITHUB_OUTPUT
           fi
 
       - name: Decode Keystore
         if: steps.signing.outputs.available == 'true'
         run: echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > komi-store-release.jks
 
-      - name: Build Signed Release (APK + AAB)
+      - name: Build Signed Release APK
         if: steps.signing.outputs.available == 'true'
         shell: bash
         env:
@@ -145,55 +167,84 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          ./gradlew :composeApp:assembleRelease :composeApp:bundleRelease \
-            -Pandroid.injected.signing.store.file=komi-store-release.jks \
-            -Pandroid.injected.signing.store.password="$ANDROID_KEY_STORE_PASSWORD" \
-            -Pandroid.injected.signing.key.alias="$ANDROID_KEY_ALIAS" \
-            -Pandroid.injected.signing.key.password="$ANDROID_KEY_PASSWORD" \
+          ./gradlew :composeApp:assembleRelease \
+            -Pandroid.injected.signing.store.file=${{ github.workspace }}/komi-store-release.jks \
+            -Pandroid.injected.signing.store.password="${{ secrets.ANDROID_KEY_STORE_PASSWORD }}" \
+            -Pandroid.injected.signing.key.alias="${{ secrets.ANDROID_KEY_ALIAS }}" \
+            -Pandroid.injected.signing.key.password="${{ secrets.ANDROID_KEY_PASSWORD }}" \
             --stacktrace --no-daemon
 
-      - name: Build Debug (APK + AAB) as fallback
+      - name: Build Debug APK (No Signing Config)
         if: steps.signing.outputs.available != 'true'
-        run: ./gradlew :composeApp:assembleDebug :composeApp:bundleDebug --stacktrace --no-daemon
+        run: ./gradlew :composeApp:assembleDebug --stacktrace --no-daemon
 
       - name: Cleanup keystore
         if: always()
         run: rm -f komi-store-release.jks
 
-      - name: Collect and rename APK + AAB
+      - name: Collect and rename APK
         shell: bash
         env:
           VERSION: ${{ needs.create-release.outputs.version }}
-          SIGNED: ${{ steps.signing.outputs.available }}
         run: |
           rm -rf dist
           mkdir -p dist
-          if [ "$SIGNED" = "true" ]; then
-            APK=$(find composeApp/build/outputs/apk/release -name "*.apk" | head -1)
-            AAB=$(find composeApp/build/outputs/bundle/release -name "*.aab" | head -1)
-            [ -n "$APK" ] && cp "$APK" "komi-store-${VERSION}-android.apk"
-            [ -n "$AAB" ] && cp "$AAB" "komi-store-${VERSION}-android.aab"
-          else
-            APK=$(find composeApp/build/outputs/apk/debug -name "*.apk" | head -1)
-            AAB=$(find composeApp/build/outputs/bundle/debug -name "*.aab" | head -1)
-            [ -n "$APK" ] && cp "$APK" "komi-store-${VERSION}-android-debug.apk"
-            [ -n "$AAB" ] && cp "$AAB" "komi-store-${VERSION}-android-debug.aab"
+          APK=$(find composeApp/build/outputs/apk -name "*.apk" | head -1)
+          if [ -z "$APK" ]; then
+            echo "::error::No APK found in composeApp/build/outputs/apk"
+            exit 1
           fi
-          ls -la komi-store-*.apk komi-store-*.aab 2>&1
+          cp "$APK" "komi-store-${VERSION}-android.apk"
+          ls -la komi-store-*.apk
 
-      - name: Upload APK + AAB to Release
+      - name: Upload APK to Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION="${{ needs.create-release.outputs.version }}"
+          APK_PATH="komi-store-${VERSION}-android.apk"
           EXISTING_ASSETS=$(gh release view "$VERSION" --repo "${{ github.repository }}" \
             --json assets --jq '.assets[].name')
-          for f in komi-store-*.apk komi-store-*.aab; do
-            [ -f "$f" ] || continue
-            if echo "$EXISTING_ASSETS" | grep -Fqx "$f"; then
-              echo "Skipping existing asset $f"
-            else
-              echo "Uploading $f to release $VERSION ..."
-              gh release upload "$VERSION" "$f" --repo "${{ github.repository }}"
-            fi
-          done
+          if grep -Fqx "$APK_PATH" <<< "$EXISTING_ASSETS"; then
+            echo "Skipping existing Release asset $APK_PATH"
+          else
+            echo "Uploading $APK_PATH to release $VERSION ..."
+            gh release upload "$VERSION" "$APK_PATH" \
+              --repo ${{ github.repository }}
+          fi
+
+  prune-release-assets:
+    needs: [create-release, build-android]
+    if: always() && needs.create-release.result == 'success' && needs.create-release.outputs.version != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Remove unnecessary metadata from the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ needs.create-release.outputs.version }}
+        run: |
+          ASSETS=$(gh release view "$RELEASE_VERSION" --repo "$GITHUB_REPOSITORY" \
+            --json assets --jq '.assets[].name')
+
+          PRUNED=0
+          while IFS= read -r asset; do
+            [[ -z "$asset" ]] && continue
+            case "$asset" in
+              latest*.yml|*.blockmap)
+                echo "Removing $asset"
+                gh release delete-asset "$RELEASE_VERSION" "$asset" \
+                  --repo "$GITHUB_REPOSITORY" --yes
+                PRUNED=$((PRUNED + 1))
+                ;;
+            esac
+          done <<< "$ASSETS"
+
+          if [[ "$PRUNED" -eq 0 ]]; then
+            echo '- Release 资产已是干净状态，无需清理' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- 已从 Release 移除 $PRUNED 个元数据文件（latest*.yml / *.blockmap）" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          echo '### Release 资产' >> "$GITHUB_STEP_SUMMARY"
+          gh release view "$RELEASE_VERSION" --repo "$GITHUB_REPOSITORY" \
+            --json assets --jq '.assets[] | "- \(.name)（\(.size) 字节）"' >> "$GITHUB_STEP_SUMMARY"
