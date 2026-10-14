@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Refresh
+
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -71,11 +73,12 @@ fun AboutRoot(
             viewModel.translate(translateTo)
         }
     }
-
     AboutScreen(
         state = state,
         onBack = onNavigateBack,
+        onRefresh = viewModel::refresh,
         onRetry = viewModel::retry,
+
         onTranslate = viewModel::translate,
         onToggleTranslation = viewModel::toggleTranslation,
         onPickLanguage = viewModel::showLanguagePicker,
@@ -90,7 +93,9 @@ fun AboutRoot(
 private fun AboutScreen(
     state: DetailsAboutState,
     onBack: () -> Unit,
+    onRefresh: () -> Unit,
     onRetry: () -> Unit,
+
     onTranslate: (String) -> Unit,
     onToggleTranslation: () -> Unit,
     onPickLanguage: () -> Unit,
@@ -119,7 +124,15 @@ private fun AboutScreen(
                         contentDescription = stringResource(Res.string.cd_back),
                     )
                 },
+                actions = {
+                    KomiIconButton(
+                        onClick = onRefresh,
+                        icon = Icons.Filled.Refresh,
+                        contentDescription = stringResource(Res.string.refresh),
+                    )
+                },
                 title = state.repoName,
+
             )
         },
     ) { innerPadding ->

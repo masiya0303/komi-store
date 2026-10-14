@@ -172,6 +172,7 @@
     <string name="error_state_subtitle_not_found">The repository may be private, renamed, or deleted.</string>
     <string name="error_state_subtitle_generic">We couldn't load this repo. Use the Retry button below.</string>
     <string name="retry">Retry</string>
+<string name="refresh">Refresh</string>
     <string name="error_state_go_back">Go back</string>
     <string name="no_description">No description provided.</string>
     <string name="no_release_notes">No release notes.</string>

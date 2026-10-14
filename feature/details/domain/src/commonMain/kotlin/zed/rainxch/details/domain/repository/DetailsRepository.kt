@@ -43,7 +43,7 @@ interface DetailsRepository {
         defaultBranch: String,
         sourceHost: String? = null,
         forceRefresh: Boolean = false,
-    ): Triple<ReadmeContent, LanguageCode?, ReadmePath>>
+    ): Triple<ReadmeContent, LanguageCode?, ReadmePath>?
 
     suspend fun getRepoStats(
         owner: String,

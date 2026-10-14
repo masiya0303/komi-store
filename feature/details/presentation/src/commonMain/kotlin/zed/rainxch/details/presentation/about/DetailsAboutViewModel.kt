@@ -33,10 +33,43 @@ class DetailsAboutViewModel(
     init {
         load()
     }
-
     fun retry() {
         load()
     }
+
+    fun refresh() {
+        viewModelScope.launch {
+            _state.update { it.copy(isLoading = true, errorMessage = null) }
+            runCatching {
+                val resolved = if (owner.isNotBlank() && repo.isNotBlank()) {
+                    detailsRepository.getRepositoryByOwnerAndName(owner, repo, sourceHost)
+                } else {
+                    detailsRepository.getRepositoryById(repositoryId)
+                }
+                val readme = detailsRepository.getReadme(
+                    owner = resolved.owner.login,
+                    repo = resolved.name,
+                    defaultBranch = resolved.defaultBranch,
+                    sourceHost = sourceHost,
+                    forceRefresh = true,
+                )
+                resolved to readme
+            }.onSuccess { (resolved, readme) ->
+                _state.update {
+                    it.copy(
+                        isLoading = false,
+                        repoName = resolved.name,
+                        readmeMarkdown = readme?.first.orEmpty(),
+                        readmeLanguage = readme?.second,
+                    )
+                }
+                rebuildDisplayed()
+            }.onFailure { e ->
+                _state.update { it.copy(isLoading = false, errorMessage = e.message ?: getString(Res.string.failed_to_load)) }
+            }
+        }
+    }
+
 
     fun translate(targetLanguageCode: String) {
         val markdown = _state.value.readmeMarkdown

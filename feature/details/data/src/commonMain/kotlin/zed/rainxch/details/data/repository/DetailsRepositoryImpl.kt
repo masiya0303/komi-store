@@ -412,21 +412,27 @@ class DetailsRepositoryImpl(
                     linkBaseUrl = "https://github.com/$owner/$repo/blob/$defaultBranch/",
                 )
             }
-
     override suspend fun getReadme(
         owner: String,
         repo: String,
         defaultBranch: String,
         sourceHost: String?,
+        forceRefresh: Boolean,
     ): Triple<String, String?, String>? {
-        if (sourceHost != null) return getForgejoReadme(owner, repo, defaultBranch, sourceHost)
+        if (sourceHost != null) return getForgejoReadme(owner, repo, defaultBranch, sourceHost, forceRefresh)
 
-        val cacheKey = "details:readme:v4:$owner/$repo"
+        // Fork change: v4 -> v5 to force-bust the old snapshot cache.
+        val cacheKey = "details:readme:v5:$owner/$repo"
 
-        cacheManager.get<CachedReadme>(cacheKey)?.let { cached ->
-            logger.debug("Cache hit for readme $owner/$repo")
-            return Triple(cached.content, cached.languageCode, cached.path)
+        if (forceRefresh) {
+            cacheManager.invalidate(cacheKey)
+        } else {
+            cacheManager.get<CachedReadme>(cacheKey)?.let { cached ->
+                logger.debug("Cache hit for readme $owner/$repo")
+                return Triple(cached.content, cached.languageCode, cached.path)
+            }
         }
+
 
         val backendResult = backendApiClient.getReadme(owner, repo)
         backendResult.fold(
@@ -741,11 +747,16 @@ class DetailsRepositoryImpl(
         repo: String,
         defaultBranch: String,
         sourceHost: String,
+        forceRefresh: Boolean = false,
     ): Triple<String, String?, String>? {
 
-        val cacheKey = "details:readme:forgejo:v2:$sourceHost:$owner/$repo"
-        cacheManager.get<CachedReadme>(cacheKey)?.let {
-            return Triple(it.content, it.languageCode, it.path)
+        val cacheKey = "details:readme:forgejo:v3:$sourceHost:$owner/$repo"
+        if (forceRefresh) {
+            cacheManager.invalidate(cacheKey)
+        } else {
+            cacheManager.get<CachedReadme>(cacheKey)?.let {
+                return Triple(it.content, it.languageCode, it.path)
+            }
         }
         val client = forgejoClientRegistry.clientFor(sourceHost)
 
