@@ -218,8 +218,8 @@ jobs:
           VERSION: ${{ needs.create-release.outputs.version }}
           SIGNED: ${{ steps.signing.outputs.available }}
         run: |
+          rm -rf dist
           mkdir -p dist
-          if [ "$SIGNED" = "true" ]; then
             cp composeApp/build/outputs/apk/release/*.apk "dist/komi-store-${VERSION}-release.apk"
             cp composeApp/build/outputs/bundle/release/*.aab "dist/komi-store-${VERSION}-release.aab"
           else
