@@ -56,7 +56,7 @@ jobs:
             VERSION="$PACKAGE_VERSION"
           fi
 
-          if [ "${VERSION#v}" != "$VERSION" ]; then
+          if [[ "$VERSION" != v* ]]; then
             VERSION="v$VERSION"
           fi
           if ! echo "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.+-]+)?$'; then
