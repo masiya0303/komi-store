@@ -64,8 +64,8 @@ jobs:
         id: version
         shell: bash
         run: |
-          # 从 composeApp/build.gradle.kts 提取 versionName
-          VERSION=$(grep -oP 'versionName\s*=\s*"\K[^"]+' composeApp/build.gradle.kts || echo "1.0.0")
+          # 从 gradle/libs.versions.toml 提取 projectVersionName
+          VERSION=$(grep -oP 'projectVersionName\s*=\s*"\K[^"]+' gradle/libs.versions.toml || echo "1.0.0")
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
           
