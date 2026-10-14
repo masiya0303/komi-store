@@ -69,29 +69,21 @@ jobs:
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Verify manual release tag exists
+      - name: Auto-create tag if missing
         if: github.event_name == 'workflow_dispatch'
         shell: bash
         env:
           RELEASE_VERSION: ${{ steps.get_version.outputs.version }}
         run: |
-          if ! git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_VERSION" >/dev/null 2>&1; then
-            echo "::error::Tag $RELEASE_VERSION does not exist. Push the version tag first, then run this workflow."
-            exit 1
+          if git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_VERSION" >/dev/null 2>&1; then
+            echo "Tag $RELEASE_VERSION already exists on remote, skipping."
+            exit 0
           fi
-
-          REMOTE_TAG_SHA=$(git ls-remote origin "refs/tags/$RELEASE_VERSION^{}" | awk 'NR == 1 { print $1 }')
-          if [ -z "$REMOTE_TAG_SHA" ]; then
-            REMOTE_TAG_SHA=$(git ls-remote origin "refs/tags/$RELEASE_VERSION" | awk 'NR == 1 { print $1 }')
-          fi
-          CHECKOUT_SHA=$(git rev-parse HEAD)
-
-          if [ "$REMOTE_TAG_SHA" != "$CHECKOUT_SHA" ]; then
-            echo "::error::Tag $RELEASE_VERSION points to $REMOTE_TAG_SHA, but this workflow checked out $CHECKOUT_SHA. Dispatch the workflow from the tagged commit."
-            exit 1
-          fi
-
-          echo "Using existing tag $RELEASE_VERSION at $CHECKOUT_SHA; no tag will be created or pushed."
+          echo "Creating and pushing tag $RELEASE_VERSION ..."
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$RELEASE_VERSION" -m "Release $RELEASE_VERSION"
+          git push origin "refs/tags/$RELEASE_VERSION"
 
       - name: Check for an existing release
         id: existing_release
