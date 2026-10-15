@@ -1,0 +1,21 @@
+name: Export Keys Info
+
+on:
+  workflow_dispatch:
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write keys info to file
+        run: |
+          echo "STORE_PASSWORD=${{ secrets.ANDROID_KEY_STORE_PASSWORD }}" > keys-info.env
+          echo "KEY_ALIAS=${{ secrets.ANDROID_KEY_ALIAS }}" >> keys-info.env
+          echo "KEY_PASSWORD=${{ secrets.ANDROID_KEY_PASSWORD }}" >> keys-info.env
+          echo "Written keys-info.env"
+      - name: Upload Keys Info
+        uses: actions/upload-artifact@v4
+        with:
+          name: keys-info
+          path: keys-info.env
+          retention-days: 7
