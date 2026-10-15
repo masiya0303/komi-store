@@ -1,0 +1,23 @@
+name: Export Keystore
+
+on:
+  workflow_dispatch:
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Export Keystore
+        run: |
+          echo "Decoding keystore..."
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > keystore-export.jks
+          ls -la keystore-export.jks
+          echo "ANDROID_KEY_ALIAS=${{ secrets.ANDROID_KEY_ALIAS }}"
+          echo "ANDROID_KEY_STORE_PASSWORD=${{ secrets.ANDROID_KEY_STORE_PASSWORD }}"
+          echo "ANDROID_KEY_PASSWORD=${{ secrets.ANDROID_KEY_PASSWORD }}"
+      - name: Upload Keystore
+        uses: actions/upload-artifact@v4
+        with:
+          name: signing-keystore
+          path: keystore-export.jks
+          retention-days: 7
